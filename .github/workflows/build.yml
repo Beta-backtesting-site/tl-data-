@@ -25,7 +25,7 @@ jobs:
     timeout-minutes: 340
     strategy:
       fail-fast: false
-      max-parallel: 6
+      max-parallel: 4
       matrix:
         symbol: [EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, XAUUSD, XAGUSD, USOIL, UKOIL, NAS100, US500, US30, GER40, UK100, JPN225, BTCUSD, ETHUSD]
     steps:

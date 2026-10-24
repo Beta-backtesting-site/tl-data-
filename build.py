@@ -36,21 +36,32 @@ FEED = "https://datafeed.dukascopy.com/datafeed/{inst}/{y:04d}/{m:02d}/{d:02d}/{
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def fetch(url, tries=10):
-    """Downloads one file politely: backs off when Dukascopy says slow down."""
+STATS = {"ok": 0, "missing": 0, "retries": 0, "failed": 0, "codes": {}}
+
+
+def fetch(url, tries=8):
+    """Downloads one file politely: backs off when Dukascopy says slow down.
+    Returns b"" for a file that doesn't exist and None if it never came."""
     for k in range(tries):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (TickLab library builder)"})
             with urllib.request.urlopen(req, timeout=60) as r:
+                STATS["ok"] += 1
                 return r.read()
         except urllib.error.HTTPError as e:
             if e.code == 404:
+                STATS["missing"] += 1
                 return b""
-            wait = float(e.headers.get("Retry-After") or 0) or min(60, 2 * 2 ** k)
-        except Exception:
-            wait = min(60, 2 * 2 ** k)
+            STATS["codes"][e.code] = STATS["codes"].get(e.code, 0) + 1
+            wait = float(e.headers.get("Retry-After") or 0) or min(30, 1.5 * 2 ** k)
+        except Exception as e:
+            name = type(e).__name__
+            STATS["codes"][name] = STATS["codes"].get(name, 0) + 1
+            wait = min(30, 1.5 * 2 ** k)
+        STATS["retries"] += 1
         time.sleep(wait + random.random())
-    raise RuntimeError("gave up on " + url)
+    STATS["failed"] += 1
+    return None
 
 
 def candles(raw):
@@ -78,7 +89,11 @@ def build_month(sym, y, m, pool):
     files = list(pool.map(fetch, urls))
     first = dt.datetime(y, m, 1, tzinfo=dt.timezone.utc)
     rows = []
+    missing = 0
     for i, d in enumerate(days):
+        if files[2 * i] is None or files[2 * i + 1] is None:
+            missing += 1                       # never came: leave the day out rather than stop
+            continue
         bid, ask = candles(files[2 * i]), candles(files[2 * i + 1])
         base = int((dt.datetime(d.year, d.month, d.day, tzinfo=dt.timezone.utc) - first).total_seconds() // 60)
         for b, a in zip(bid, ask):
@@ -88,7 +103,7 @@ def build_month(sym, y, m, pool):
             _, ao, ac, al, ah, _ = a
             rows.append((base + sec // 60, bo, bh, bl, bc, ao, ah, al, ac))
     rows.sort()
-    return scale, rows
+    return scale, rows, missing
 
 
 def encode(scale, rows):
@@ -124,19 +139,19 @@ def last_full_month():
 def build_symbol(sym, since, force):
     until = last_full_month()
     os.makedirs(os.path.join(HERE, "m1", sym), exist_ok=True)
-    with cf.ThreadPoolExecutor(4) as pool:
+    with cf.ThreadPoolExecutor(int(os.environ.get("TL_THREADS", "3"))) as pool:
         for y, m in months_between(since, until):
             path = os.path.join(HERE, "m1", sym, "%04d-%02d.tlm1.gz" % (y, m))
             if os.path.exists(path) and not force:
                 continue
             t0 = time.time()
-            scale, rows = build_month(sym, y, m, pool)
-            if not rows:
-                print(sym, "%04d-%02d" % (y, m), "no prices", flush=True)
-                continue
+            scale, rows, missing = build_month(sym, y, m, pool)
+            note = "%s %04d-%02d: %d minutes in %.0fs, %d days missing, requests %s" % (sym, y, m, len(rows), time.time() - t0, missing, json.dumps(STATS))
+            print(("::warning::" if missing else "::notice::") + note, flush=True)
+            if not rows or missing > 3:
+                continue                       # try this month again next run
             with open(path, "wb") as f:
                 f.write(encode(scale, rows))
-            print(sym, "%04d-%02d" % (y, m), len(rows), "minutes", os.path.getsize(path) // 1024, "KB", "%.0fs" % (time.time() - t0), flush=True)
 
 
 def manifest():
