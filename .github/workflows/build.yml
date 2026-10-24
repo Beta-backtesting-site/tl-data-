@@ -1,0 +1,72 @@
+name: Build price library
+
+# Fills m1/ with 1-minute bid and ask for every symbol, one file per month.
+# Run it by hand the first time (Actions > Build price library > Run workflow).
+# After that it runs on the 3rd of every month and adds the month just finished.
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: First month to build (YYYY-MM)
+        default: "2021-10"
+      force:
+        description: Rebuild months that already exist
+        type: boolean
+        default: false
+  schedule:
+    - cron: "23 5 3 * *"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        symbol: [EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, XAUUSD, XAGUSD, USOIL, UKOIL, NAS100, US500, US30, GER40, UK100, JPN225, BTCUSD, ETHUSD]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build ${{ matrix.symbol }}
+        run: python build.py --symbol ${{ matrix.symbol }} --since "${{ inputs.since || '2021-10' }}" ${{ inputs.force && '--force' || '' }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m1-${{ matrix.symbol }}
+          path: m1/${{ matrix.symbol }}
+          if-no-files-found: ignore
+          retention-days: 3
+
+  publish:
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Collect files and update the manifest
+        run: |
+          for d in artifacts/m1-*; do
+            [ -d "$d" ] || continue
+            s="${d#artifacts/m1-}"; mkdir -p "m1/$s"
+            cp "$d"/*.tlm1.gz "m1/$s/" 2>/dev/null || true
+          done
+          python build.py --manifest
+      - name: Commit
+        run: |
+          git config user.name "Tick Lab library builder"
+          git config user.email "actions@users.noreply.github.com"
+          git add m1 manifest.json
+          git diff --cached --quiet && { echo "Nothing new"; exit 0; }
+          git commit -m "Price library: $(date -u +%Y-%m-%d)"
+          git push
