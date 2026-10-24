@@ -32,7 +32,25 @@ SYMBOLS = {
     "GER40": ("DEUIDXEUR", 1000, False), "UK100": ("GBRIDXGBP", 1000, False), "JPN225": ("JPNIDXJPY", 1000, False),
     "BTCUSD": ("BTCUSD", 10, True), "ETHUSD": ("ETHUSD", 10, True),
 }
-FEED = "https://datafeed.dukascopy.com/datafeed/{inst}/{y:04d}/{m:02d}/{d:02d}/{side}_candles_min_1.bi5"
+# Dukascopy refuses GitHub's servers, so the Action fetches through Tick Lab's Cloudflare relay (TL_FEED).
+FEED = os.environ.get("TL_FEED", "https://datafeed.dukascopy.com/datafeed/").rstrip("/") + "/{inst}/{y:04d}/{m:02d}/{d:02d}/{side}_candles_min_1.bi5"
+BUDGET = float(os.environ.get("TL_BUDGET", "0"))   # seconds to work before stopping cleanly (0 = no limit)
+STARTED = time.time()
+GAP = float(os.environ.get("TL_GAP", "0"))   # seconds between requests, to stay inside the relay's free daily allowance
+_next = [0.0]
+import threading
+_lock = threading.Lock()
+
+
+def pace():
+    if not GAP:
+        return
+    with _lock:
+        now = time.time()
+        at = max(now, _next[0])
+        _next[0] = at + GAP
+    if at > now:
+        time.sleep(at - now)
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -43,6 +61,7 @@ def fetch(url, tries=8):
     """Downloads one file politely: backs off when Dukascopy says slow down.
     Returns b"" for a file that doesn't exist and None if it never came."""
     for k in range(tries):
+        pace()
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (TickLab library builder)"})
             with urllib.request.urlopen(req, timeout=60) as r:
@@ -140,7 +159,10 @@ def build_symbol(sym, since, force):
     until = last_full_month()
     os.makedirs(os.path.join(HERE, "m1", sym), exist_ok=True)
     with cf.ThreadPoolExecutor(int(os.environ.get("TL_THREADS", "3"))) as pool:
-        for y, m in months_between(since, until):
+        for y, m in reversed(list(months_between(since, until))):   # newest first: the library is useful sooner
+            if BUDGET and time.time() - STARTED > BUDGET:
+                print("::notice::%s: time's up for this run, the next run carries on" % sym, flush=True)
+                break
             path = os.path.join(HERE, "m1", sym, "%04d-%02d.tlm1.gz" % (y, m))
             if os.path.exists(path) and not force:
                 continue

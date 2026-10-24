@@ -1,8 +1,11 @@
 name: Build price library
 
 # Fills m1/ with 1-minute bid and ask for every symbol, one file per month.
-# Run it by hand the first time (Actions > Build price library > Run workflow).
-# After that it runs on the 3rd of every month and adds the month just finished.
+# Dukascopy refuses GitHub's servers and only lets a file or two a second
+# through, so files come via Tick Lab's Cloudflare relay. Each run works for
+# about 4 hours, saves what it has, and the next run carries on. Requests are
+# spaced out so the relay stays inside Cloudflare's free 100,000 a day.
+# Once everything is built, runs only add the month just finished.
 on:
   workflow_dispatch:
     inputs:
@@ -14,7 +17,11 @@ on:
         type: boolean
         default: false
   schedule:
-    - cron: "23 5 3 * *"
+    - cron: "23 */6 * * *"
+
+concurrency:
+  group: build-library
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -25,7 +32,7 @@ jobs:
     timeout-minutes: 340
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 6
       matrix:
         symbol: [EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, XAUUSD, XAGUSD, USOIL, UKOIL, NAS100, US500, US30, GER40, UK100, JPN225, BTCUSD, ETHUSD]
     steps:
@@ -34,6 +41,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build ${{ matrix.symbol }}
+        env:
+          TL_FEED: https://ticklab-assistant.jaketravis219.workers.dev/duka/
+          TL_BUDGET: "14400"
+          TL_THREADS: "1"
+          TL_GAP: "9"
         run: python build.py --symbol ${{ matrix.symbol }} --since "${{ inputs.since || '2021-10' }}" ${{ inputs.force && '--force' || '' }}
       - uses: actions/upload-artifact@v4
         with:
