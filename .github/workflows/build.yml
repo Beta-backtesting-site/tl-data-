@@ -45,7 +45,7 @@ jobs:
           TL_FEED: https://ticklab-assistant.jaketravis219.workers.dev/duka/
           TL_BUDGET: "14400"
           TL_THREADS: "1"
-          TL_GAP: "9"
+          TL_GAP: "5"
         run: python build.py --symbol ${{ matrix.symbol }} --since "${{ inputs.since || '2021-10' }}" ${{ inputs.force && '--force' || '' }}
       - uses: actions/upload-artifact@v4
         with:
