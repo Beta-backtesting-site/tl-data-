@@ -1,0 +1,13 @@
+name: Probe data feed
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Try a few Dukascopy files
+        run: |
+          for u in EURUSD/2026/07/01/BID_candles_min_1.bi5 EURUSD/2026/07/02/BID_candles_min_1.bi5 GBPUSD/2026/07/01/ASK_candles_min_1.bi5 EURUSD/2026/07/01/10h_ticks.bi5; do
+            r=$(curl -s -o /dev/null -w "%{http_code} %{size_download}B %{time_total}s" --max-time 30 -A "Mozilla/5.0" "https://datafeed.dukascopy.com/datafeed/$u")
+            echo "::notice::$u -> $r"
+          done
